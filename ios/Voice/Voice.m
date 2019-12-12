@@ -10,6 +10,7 @@
 @property (nonatomic) SFSpeechRecognizer* speechRecognizer;
 @property (nonatomic) SFSpeechAudioBufferRecognitionRequest* recognitionRequest;
 @property (nonatomic) AVAudioEngine* audioEngine;
+@property (nonatomic) AVAudioMixerNode* mixer;
 @property (nonatomic) SFSpeechRecognitionTask* recognitionTask;
 @property (nonatomic) AVAudioSession* audioSession;
 /** Whether speech recognition is finishing.. */
@@ -73,6 +74,10 @@
 }
 
 - (void) teardown {
+    if (self.recognitionTask == nil) {
+        return;
+    }
+    
     self.isTearingDown = YES;
     [self.recognitionTask cancel];
     self.recognitionTask = nil;
@@ -84,14 +89,17 @@
     [self.recognitionRequest endAudio];
     
     // Remove tap on bus
-    [self.audioEngine.inputNode removeTapOnBus:0];
-    [self.audioEngine.inputNode reset];
     
     // Stop audio engine and dereference it for re-allocation
     if (self.audioEngine.isRunning) {
         [self.audioEngine stop];
+        [self.audioEngine disconnectNodeInput:self.mixer];
+        [self.mixer removeTapOnBus:0];
+        [self.audioEngine detachNode:self.mixer];
+        [self.audioEngine.inputNode reset];
         [self.audioEngine reset];
         self.audioEngine = nil;
+        self.mixer = nil;
     }
     
     self.recognitionRequest = nil;
@@ -212,12 +220,12 @@
     }];
     
     AVAudioFormat* recordingFormat = [inputNode outputFormatForBus:0];
-    AVAudioMixerNode *mixer = [[AVAudioMixerNode alloc] init];
-    [self.audioEngine attachNode:mixer];
+    self.mixer = [[AVAudioMixerNode alloc] init];
+    [self.audioEngine attachNode:self.mixer];
     
     // Start recording and append recording buffer to speech recognizer
     @try {
-        [mixer installTapOnBus:0 bufferSize:1024 format:recordingFormat block:^(AVAudioPCMBuffer * _Nonnull buffer, AVAudioTime * _Nonnull when) {
+        [self.mixer installTapOnBus:0 bufferSize:1024 format:recordingFormat block:^(AVAudioPCMBuffer * _Nonnull buffer, AVAudioTime * _Nonnull when) {
             // Todo: write recording buffer to file (if user opts in)
             if (self.recognitionRequest != nil) {
                 [self.recognitionRequest appendAudioPCMBuffer:buffer];
@@ -230,7 +238,7 @@
         return;
     } @finally {}
     
-    [self.audioEngine connect:inputNode to:mixer format:recordingFormat];
+    [self.audioEngine connect:inputNode to:self.mixer format:recordingFormat];
     [self.audioEngine prepare];
     NSError* audioSessionError = nil;
     [self.audioEngine startAndReturnError:&audioSessionError];
